@@ -1,42 +1,49 @@
-#!/usr/bin/env python3
-"""
-client.py
-Client-side script to send the onion blob to the first hop.
-"""
-import json, socket, time, argparse, os
+"""Client helper that pushes the onion blob to the first hop."""
+import argparse
+import json
+import socket
+import time
+from pathlib import Path
+from typing import Iterable, Tuple
 
-NETDIR = "/tmp/onion_mininet"
-OUTFILE = f"{NETDIR}/onion.out"
+from paths import ONION_OUT, ROUTE_FILE
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--route", required=True)
-    args = parser.parse_args()
 
-    if not os.path.exists(args.route) or not os.path.exists(OUTFILE):
-        print(f"[CLIENT] Error: Routes file ({args.route}) or Onion Blob ({OUTFILE}) not found. Did you run onion.py?")
-        return
+def send_onion(route_path: Path = ROUTE_FILE, onion_path: Path = ONION_OUT) -> Tuple[float, str]:
+    route_path = Path(route_path)
+    onion_path = Path(onion_path)
 
-    routes = json.load(open(args.route))
+    if not route_path.exists() or not onion_path.exists():
+        raise FileNotFoundError(
+            f"Missing route file ({route_path}) or onion blob ({onion_path}). Run onion builder first."
+        )
+
+    routes = json.loads(route_path.read_text())
     first_hop = routes["route"][0]
+    blob = onion_path.read_bytes()
 
-    blob = open(OUTFILE, "rb").read()
+    start = time.time()
+    with socket.create_connection((first_hop["ip"], int(first_hop["port"])), timeout=5) as sock:
+        sock.sendall(blob)
+        sock.shutdown(socket.SHUT_WR)
+        reply = sock.recv(4096)
+    elapsed = time.time() - start
+    return elapsed, reply.decode(errors="replace")
 
-    print(f"[CLIENT] Connecting to first hop: {first_hop['ip']}:{first_hop['port']}")
+
+def main(argv: Iterable[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(description="Send the onion blob to the first hop.")
+    parser.add_argument("--route", default=str(ROUTE_FILE), help="Path to routes.json")
+    parser.add_argument("--onion", default=str(ONION_OUT), help="Path to onion blob produced by onion.py")
+    args = parser.parse_args(list(argv) if argv is not None else None)
+
     try:
-        t0 = time.time()
-        s = socket.create_connection((first_hop["ip"], first_hop["port"]))
-        s.sendall(blob)
-        s.shutdown(socket.SHUT_WR)
+        elapsed, reply = send_onion(Path(args.route), Path(args.onion))
+        print(f"[CLIENT] elapsed {elapsed:.4f}s")
+        print(f"[CLIENT] Server reply: {reply}")
+    except Exception as exc:
+        print(f"[CLIENT] Connection/Transmission Error: {exc}")
 
-        reply = s.recv(4096)
-        t1 = time.time()
-
-        print(f"[CLIENT] elapsed {t1 - t0:.4f}s")
-        print("[CLIENT] Server reply:", reply.decode(errors="replace"))
-        s.close()
-    except Exception as e:
-        print(f"[CLIENT] Connection/Transmission Error: {e}")
 
 if __name__ == "__main__":
     main()

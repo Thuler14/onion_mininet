@@ -1,74 +1,87 @@
-#!/usr/bin/env python3
-"""
-onion.py
-Client-side script to build the onion structure from routes.json.
-"""
-import json, os, base64
+"""Build an onion-encoded payload based on a routes.json description."""
+import argparse
+import base64
+import json
+import os
+from pathlib import Path
+from typing import Iterable, Mapping, Union
+
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-ROUTE_FILE = "/tmp/onion_mininet/routes.json"
-OUTFILE = "/tmp/onion_mininet/onion.out"
+from paths import DEFAULT_MESSAGE, ONION_OUT, ROUTE_FILE, ensure_netdir
 
-def encrypt_layer(key_hex, inner_bytes):
-    """Encrypts the inner payload (as bytes) with AES-GCM, returning the outer JSON-encoded bytes."""
+RouteHop = Mapping[str, Union[str, int]]
+
+
+def encrypt_layer(key_hex: str, inner_bytes: bytes) -> bytes:
+    """Encrypt the inner payload with AES-GCM using the provided hex key."""
     key = bytes.fromhex(key_hex)
     aes = AESGCM(key)
     nonce = os.urandom(12)
     ciphertext = aes.encrypt(nonce, inner_bytes, None)
 
-    # Returns the structure the router expects: {"nonce": "...", "payload": "..."}
-    return json.dumps({
-        "nonce": base64.b64encode(nonce).decode(),
-        "payload": base64.b64encode(ciphertext).decode()
-    }).encode() 
+    return json.dumps(
+        {
+            "nonce": base64.b64encode(nonce).decode(),
+            "payload": base64.b64encode(ciphertext).decode(),
+        }
+    ).encode()
 
-def main():
-    if not os.path.exists(ROUTE_FILE):
-        print(f"Error: Route file not found at {ROUTE_FILE}")
-        return
 
-    route_info = json.load(open(ROUTE_FILE))
-    route_hops = route_info["route"] # [r1, r2, r3]
-    server_info = route_info["server"]
+def build_layers(route_hops: Iterable[RouteHop], server_info: Mapping[str, Union[str, int]], payload: str) -> bytes:
+    """Create the onion blob by wrapping from the last hop to the first."""
+    onion_blob = json.dumps({"server": server_info, "data": payload}).encode()
 
-    # 1. Innermost Layer (L3 - for r3)
-    # This structure tells the EXIT node (r3) to deliver the data.
-    inner_most_layer_data = {
-        "server": server_info,
-        "data": "HELLO_FROM_CLIENT_VIA_ONION" 
-    }
-    onion_blob = json.dumps(inner_most_layer_data).encode()
+    hops = list(route_hops)
+    for i in range(len(hops) - 1, -1, -1):
+        router_key = str(hops[i]["key"])
 
-    # 2. Encrypt the remaining layers (r3 -> r2 -> r1)
-    # The loop iterates backward, from the last hop (r3, index 2) back to the first hop (r1, index 0).
-    for i in range(len(route_hops) - 1, -1, -1):
-        router_key = route_hops[i]["key"]
-        
-        # If this is the final hop (r3), we just encrypt the raw message.
-        if i == len(route_hops) - 1:
+        if i == len(hops) - 1:
             onion_blob = encrypt_layer(router_key, onion_blob)
             continue
-        
-        # For all intermediate hops (r2 and r1), the inner payload must contain the forwarding instruction
-        # for the *next* router (i+1). This ensures r1 gets the next hop info for r2.
-        next_hop = route_hops[i + 1] 
-        
-        outer_layer_data = {
-            "next": {
-                "ip": next_hop["ip"],
-                "port": next_hop["port"]
-            },
-            "payload": base64.b64encode(onion_blob).decode()
-        }
-        
-        # Encrypt the forwarding instruction using the key of the current router (r_i)
-        onion_blob = encrypt_layer(
-            router_key,
-            json.dumps(outer_layer_data).encode()
-        )
 
-    open(OUTFILE, "wb").write(onion_blob)
-    print(f"Onion built and saved at {OUTFILE}")
+        next_hop = hops[i + 1]
+        outer_layer = {
+            "next": {"ip": next_hop["ip"], "port": next_hop["port"]},
+            "payload": base64.b64encode(onion_blob).decode(),
+        }
+        onion_blob = encrypt_layer(router_key, json.dumps(outer_layer).encode())
+
+    return onion_blob
+
+
+def build_onion(route_path: Path = ROUTE_FILE, outfile: Path = ONION_OUT, message: str = DEFAULT_MESSAGE) -> Path:
+    """Build the onion blob and persist it to disk."""
+    route_path = Path(route_path)
+    outfile = Path(outfile)
+
+    if not route_path.exists():
+        raise FileNotFoundError(f"Route file not found: {route_path}")
+
+    ensure_netdir()
+
+    route_info = json.loads(route_path.read_text())
+    route_hops = route_info["route"]
+    server_info = route_info["server"]
+
+    onion_blob = build_layers(route_hops, server_info, payload=message)
+    outfile.write_bytes(onion_blob)
+    return outfile
+
+
+def main(argv: Iterable[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(description="Build the onion payload from a route file.")
+    parser.add_argument("--route", default=str(ROUTE_FILE), help="Path to routes.json")
+    parser.add_argument("--outfile", default=str(ONION_OUT), help="Where to write the onion blob")
+    parser.add_argument("--message", default=DEFAULT_MESSAGE, help="Payload to deliver to the destination server")
+    args = parser.parse_args(list(argv) if argv is not None else None)
+
+    try:
+        outfile = build_onion(Path(args.route), Path(args.outfile), args.message)
+        print(f"Onion built and saved at {outfile}")
+    except Exception as exc:
+        print(f"[ONION] Error: {exc}")
+
 
 if __name__ == "__main__":
     main()
