@@ -23,16 +23,25 @@ tcpdump -n -i r1-eth1 tcp
 tcpdump -n -i h2-eth0 tcp port 9009
 ```
 
-3) In the Mininet CLI: build and send
+3) In the Mininet CLI: build and send (single step, defaults used; onion is saved to runtime/onion.out each run)
 ```bash
-h1 python3 /tmp/onion_mininet/onion.py --route /tmp/onion_mininet/routes.json --outfile /tmp/onion_mininet/onion.out --message "HELLO"
-h1 python3 /tmp/onion_mininet/client.py --route /tmp/onion_mininet/routes.json --onion /tmp/onion_mininet/onion.out
+h1 python3 client.py --message "HELLO"    # build+send with custom payload
+h1 python3 client.py                      # build+send with default payload
+h1 python3 client.py --reuse              # reuse existing onion.out instead of rebuilding
 ```
 
-4) When done: `exit` the CLI. Network tears down automatically. Logs are in `/tmp/onion_mininet/*.log`.
+Defaults: `client.py` and `onion.py` look for `runtime/routes.json` and write/read `runtime/onion.out`. You can override with `--route`/`--onion-file` if you want different paths. By default the onion is rebuilt each run; use `--reuse` to resend an existing blob.
+
+If you prefer the two-step flow (defaults still apply):
+```bash
+h1 python3 onion.py --message "HELLO"
+h1 python3 client.py --onion-file runtime/onion.out
+```
+
+4) When done: `exit` the CLI. Network tears down automatically. Logs are in `runtime/*.log` under the repo.
 
 ## No xterms?
 ```bash
 sudo python3 net.py
 ```
-Then run captures from the Mininet CLI (e.g., `r1 tcpdump -n -i r1-eth1 udp`) before sending with the same two commands above.
+Then run captures from the Mininet CLI (e.g., `r1 tcpdump -n -i r1-eth1 tcp`) before sending with the same two commands above.

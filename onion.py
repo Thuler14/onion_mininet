@@ -8,7 +8,7 @@ from typing import Iterable, Mapping, Union
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from paths import DEFAULT_MESSAGE, ONION_OUT, ROUTE_FILE, ensure_netdir
+from settings import DEFAULT_MESSAGE, ONION_OUT, ROUTE_FILE, ensure_netdir
 
 RouteHop = Mapping[str, Union[str, int]]
 
@@ -52,9 +52,15 @@ def build_layers(route_hops: Iterable[RouteHop], server_info: Mapping[str, Union
 
 def build_onion(route_path: Path = ROUTE_FILE, outfile: Path = ONION_OUT, message: str = DEFAULT_MESSAGE) -> Path:
     """Build the onion blob and persist it to disk."""
-    route_path = Path(route_path)
+    onion_blob = build_onion_bytes(route_path, message=message)
     outfile = Path(outfile)
+    outfile.write_bytes(onion_blob)
+    return outfile
 
+
+def build_onion_bytes(route_path: Path = ROUTE_FILE, message: str = DEFAULT_MESSAGE) -> bytes:
+    """Build the onion blob and return it in memory (no file write)."""
+    route_path = Path(route_path)
     if not route_path.exists():
         raise FileNotFoundError(f"Route file not found: {route_path}")
 
@@ -64,9 +70,7 @@ def build_onion(route_path: Path = ROUTE_FILE, outfile: Path = ONION_OUT, messag
     route_hops = route_info["route"]
     server_info = route_info["server"]
 
-    onion_blob = build_layers(route_hops, server_info, payload=message)
-    outfile.write_bytes(onion_blob)
-    return outfile
+    return build_layers(route_hops, server_info, payload=message)
 
 
 def main(argv: Iterable[str] | None = None) -> None:
