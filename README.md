@@ -1,47 +1,58 @@
 # Onion Mininet Demo
 
-Fast steps to run and capture.
+Tiny onion-routing lab built on Mininet: `h1` wraps a payload in three AES-GCM layers, hops through `r1 -> r2 -> r3`, and lands on `h2` where a simple server echoes back. Keys and routes are generated fresh each run and written to `runtime/`.
 
-## Prereqs
-- Linux + Mininet (run with sudo)
-- Python 3
-- Wireshark or tcpdump (optional for captures)
+## Requirements
+- Linux with sudo (Mininet needs root). Tested on Ubuntu 22.04 LTS and Linux Mint.
+- Mininet + `xterm` (for optional terminals); `sudo apt install mininet xterm`
+- Python 3.10+; `python3 -m pip install --user cryptography`
+- Optional: Wireshark or tcpdump for packet capture
 
-## Run
-1) Start everything (opens xterms so you can launch Wireshark/tcpdump):
+## Quickstart (recommended)
 ```bash
+git clone https://github.com/Thuler14/onion_mininet.git
+cd onion_mininet
+# If you downloaded a ZIP instead of cloning:
+# unzip onion_mininet.zip && cd onion_mininet
+
+# Start the topology (add --xterms if you want capture terminals)
+sudo python3 net.py
+# or, to open xterms on r1,r2,r3,h2,h1 for Wireshark/tcpdump
 sudo python3 net.py --xterms
 ```
-You’ll land in the Mininet CLI. No traffic has been sent yet.
 
-2) In any xterm (e.g., r1): start capture (traffic is TCP, default ports 9001-9003 for routers and 9009 for server)
+You land in the Mininet CLI; services are already running and `runtime/routes.json` plus router keys are in place. In any xterm (e.g., `r1`), start a capture if you want:
 ```bash
 wireshark &
-# or watch all TCP on a link
+# or
 tcpdump -n -i r1-eth1 tcp
-# or narrow to the server port
 tcpdump -n -i h2-eth0 tcp port 9009
 ```
 
-3) In the Mininet CLI: build and send (single step, defaults used; onion is saved to runtime/onion.out each run)
+From the Mininet CLI, send traffic (onion is rebuilt each time unless you reuse):
 ```bash
-h1 python3 client.py --message "HELLO"    # build+send with custom payload
-h1 python3 client.py                      # build+send with default payload
-h1 python3 client.py --reuse              # reuse existing onion.out instead of rebuilding
+h1 python3 client.py --message "HELLO"    # build + send custom payload
+h1 python3 client.py                      # build + send default payload
+h1 python3 client.py --reuse              # resend existing runtime/onion.out
 ```
 
-Defaults: `client.py` and `onion.py` look for `runtime/routes.json` and write/read `runtime/onion.out`. You can override with `--route`/`--onion-file` if you want different paths. By default the onion is rebuilt each run; use `--reuse` to resend an existing blob.
-
-If you prefer the two-step flow (defaults still apply):
+Two-step build + send if you prefer:
 ```bash
 h1 python3 onion.py --message "HELLO"
 h1 python3 client.py --onion-file runtime/onion.out
 ```
 
-4) When done: `exit` the CLI. Network tears down automatically. Logs are in `runtime/*.log` under the repo.
+Quit with `exit`; Mininet tears down. Logs and artifacts live in `runtime/` (router logs, server log, `routes.json`, `onion.out`).
 
-## No xterms?
+## Headless mode
+Skip xterms and run everything inside the CLI:
 ```bash
 sudo python3 net.py
 ```
-Then run captures from the Mininet CLI (e.g., `r1 tcpdump -n -i r1-eth1 tcp`) before sending with the same two commands above.
+Start captures from the CLI (e.g., `r1 tcpdump -n -i r1-eth1 tcp`) before sending with the same `h1 python3 ...` commands above.
+
+## What’s happening under the hood
+- `net.py` builds a 3-hop topology, generates per-run AES keys, writes `runtime/routes.json`, and launches router/server processes.
+- `onion.py` wraps the message in layered AES-GCM, producing `runtime/onion.out`.
+- `client.py` sends the blob to the first hop and prints the echoed reply + timing.
+- `node.py` peels/forwards layers; `server.py` echoes and logs the final payload.
